@@ -1,70 +1,71 @@
 import threading
 import time
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 
 # Configurações globais
 NUM_FILOSOFOS = 5
-TEMPO_LIMITE = 5  # Tempo máximo em segundos para detectar impasse
-EXECUCOES = 1000  # Número de execuções para teste
+TEMPO_LIMITE = 5
+TENTATIVAS_COMER = 3
+EXECUCOES = 1000
 
-# Função com a solução para evitar deadlock
-def jantar_dos_filosofos_com_solucao(resultados, execucao_id):
-    # Semáforos para os garfos
-    garfos = [threading.Semaphore(1) for _ in range(NUM_FILOSOFOS)]
-    estados = [False] * NUM_FILOSOFOS  # True se o filósofo está comendo
-    progresso = [0] * NUM_FILOSOFOS  # Conta quantas vezes cada filósofo mudou de estado
+def configurar_garfos():
+    """Inicializa os semáforos que representam os garfos."""
+    return [threading.Semaphore(1) for _ in range(NUM_FILOSOFOS)]
+
+def pegar_garfos(filosofo_id, garfos):
+    """Gerencia a aquisição dos garfos pelos filósofos."""
+    if filosofo_id == NUM_FILOSOFOS - 1:
+        garfos[(filosofo_id + 1) % NUM_FILOSOFOS].acquire()
+        garfos[filosofo_id].acquire()
+    else:
+        garfos[filosofo_id].acquire()
+        garfos[(filosofo_id + 1) % NUM_FILOSOFOS].acquire()
+
+def liberar_garfos(filosofo_id, garfos):
+    """Gerencia a liberação dos garfos pelos filósofos."""
+    garfos[filosofo_id].release()
+    garfos[(filosofo_id + 1) % NUM_FILOSOFOS].release()
+
+def verificar_deadlock(estados, threads):
+    """Verifica se houve deadlock no jantar."""
+    inicio = time.time()
+    while time.time() - inicio < TEMPO_LIMITE:
+        if not any(estados):
+            for t in threads:
+                t.join()
+            return False
+    return True
+
+def jantar_dos_filosofos_sem_solucao(resultados, execucao_id):
+    """Simula o problema dos filósofos com possibilidade de deadlock."""
+    garfos = configurar_garfos()
+    estados = [False] * NUM_FILOSOFOS
 
     def filosofo(filosofo_id):
-        for _ in range(3):  # Cada filósofo tenta comer 3 vezes
-            if filosofo_id == NUM_FILOSOFOS - 1:  # Último filósofo pega na ordem inversa
-                garfos[(filosofo_id + 1) % NUM_FILOSOFOS].acquire()
-                garfos[filosofo_id].acquire()
-            else:  # Demais filósofos pegam na ordem direita-esquerda
-                garfos[filosofo_id].acquire()
-                garfos[(filosofo_id + 1) % NUM_FILOSOFOS].acquire()
-            
-            # Comendo
+        for _ in range(TENTATIVAS_COMER):
+            pegar_garfos(filosofo_id, garfos)
             estados[filosofo_id] = True
-            progresso[filosofo_id] += 1  # Atualiza progresso
-            time.sleep(0.1)  # Simula o tempo comendo
+            time.sleep(0.1)
             estados[filosofo_id] = False
+            liberar_garfos(filosofo_id, garfos)
 
-            # Libera os garfos
-            garfos[filosofo_id].release()
-            garfos[(filosofo_id + 1) % NUM_FILOSOFOS].release()
-
-    # Cria e inicia as threads
-    threads = []
-    for i in range(NUM_FILOSOFOS):
-        t = threading.Thread(target=filosofo, args=(i,))
-        threads.append(t)
+    threads = [threading.Thread(target=filosofo, args=(i,)) for i in range(NUM_FILOSOFOS)]
+    for t in threads:
         t.start()
 
-    # Monitoramento para deadlock
-    inicio = time.time()
-    progresso_anterior = progresso[:]
-    while time.time() - inicio < TEMPO_LIMITE:
-        time.sleep(0.1)  # Verifica a cada 0.1 segundos
-        if not any(estados) and all(p == progresso_anterior[i] for i, p in enumerate(progresso)):
-            # Deadlock detectado
-            resultados[execucao_id] = "Deadlock"
-            for t in threads:
-                t.join()  # Aguarda todas as threads terminarem
-            return
-        progresso_anterior = progresso[:]
+    if verificar_deadlock(estados, threads):
+        resultados[execucao_id] = "Deadlock"
+    else:
+        resultados[execucao_id] = "Sem Deadlock"
 
-    # Se todas as threads finalizarem, não houve deadlock
-    for t in threads:
-        t.join()  # Aguarda todas as threads terminarem
-    resultados[execucao_id] = "Sem Deadlock"
-
-# Loop de 1000 execuções para testar a solução
+# Executa várias simulações
 resultados = {}
-for execucao_id in range(EXECUCOES):
-    jantar_dos_filosofos_com_solucao(resultados, execucao_id)
+with ThreadPoolExecutor(max_workers=10) as executor:
+    for execucao_id in range(EXECUCOES):
+        executor.submit(jantar_dos_filosofos_sem_solucao, resultados, execucao_id)
 
 # Resumo dos resultados
-deadlock_count = sum(1 for r in resultados.values() if r == "Deadlock")
-sucesso_count = EXECUCOES - deadlock_count
-
-print(f"Execuções sem deadlock: {sucesso_count}")
-print(f"Execuções com deadlock: {deadlock_count}")
+contagem_resultados = Counter(resultados.values())
+print(f"Execuções sem deadlock: {contagem_resultados['Sem Deadlock']}")
+print(f"Execuções com deadlock: {contagem_resultados['Deadlock']}")
